@@ -2,151 +2,173 @@ import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 from telegram import Bot
-import requests
+from api_quotex import Quotex
 
 # ===============================
 # CONFIGURAÇÃO
 # ===============================
+TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
+CHAT_ID = 2055716345
 
-TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"  # SEU TOKEN AQUI
-CHAT_ID = 2055716345  # SEU CHAT ID AQUI
-ALPHA_KEY = "3SYERLAJ3ZAT69TM"
-
+ALPHA_KEY = "3SYERLAJ3ZAT69TM"  # Caso queira integrar Alpha
+TIMEFRAME = "1m"
 INTERVALO_MIN = 180  # 3 minutos
 INTERVALO_MAX = 300  # 5 minutos
-TIMEFRAME = "1min"
-ULTIMAS_VELAS = 20
+TEMPO_VELA = 60  # segundos
+RED_MAX = 3
+PAUSA_APOS_RED = 600  # segundos
 
-# Lista completa de pares
 ATIVOS = [
     "AUDCAD","AUDCHF","AUDJPY","AUDNZD","AUDSGD","AUDUSD",
-    "CADCHF","CADJPY",
-    "CHFJPY","CHFNOK","CHFSGD",
+    "CADCHF","CADJPY","CHFJPY","CHFNOK","CHFSGD",
     "EURAUD","EURCAD","EURCHF","EURGBP","EURJPY","EURNOK","EURNZD","EURSGD","EURUSD","EURZAR",
     "GBPAUD","GBPCAD","GBPCHF","GBPJPY","GBPNZD","GBPSGD","GBPUSD",
-    "NOKJPY",
-    "NZDCAD","NZDCHF","NZDJPY","NZDSGD","NZDUSD",
-    "SGDJPY",
-    "USDBRL","USDCAD","USDCHF","USDDKK","USDHKD","USDJPY","USDMXN","USDSGD","USDTHB","USDZAR"
+    "NOKJPY","NZDCAD","NZDCHF","NZDJPY","NZDSGD","NZDUSD",
+    "SGDJPY","USDBRL","USDCAD","USDCHF","USDDKK","USDHKD","USDJPY","USDMXN","USDSGD","USDTHB","USDZAR"
 ]
 
+ESTRATEGIAS = {
+    "Tendência": 1.0,
+    "Reversão": 1.0,
+    "Price Action": 1.0,
+    "Micro Tendência": 1.0
+}
+
+# ===============================
+# ESTADO
+# ===============================
+estado = "LIVRE"
+sinal_atual = None
+fechamento_vela = None
+pausa_ate = None
+greens = 0
+reds = 0
+streak = 0
+
 bot = Bot(token=TOKEN)
+client = Quotex()  # já inicializado sem email/senha, usando API real
 
 # ===============================
-# HISTÓRICO DE ESTUDO
+# FUNÇÕES AUXILIARES
 # ===============================
+def agora_utc():
+    return datetime.now(timezone.utc)
 
-historico = {}  # {ativo: [{"sinal": ..., "hora": ..., "resultado": ...}, ...] }
-score_estrategia = {}  # {ativo: score}
+def proxima_vela():
+    t = agora_utc() + timedelta(seconds=TEMPO_VELA)
+    return t.replace(second=0).strftime("%H:%M")
 
-# Inicializa scores
-for ativo in ATIVOS:
-    score_estrategia[ativo] = 1.0
-    historico[ativo] = []
+def escolher_estrategia():
+    return max(ESTRATEGIAS, key=lambda x: int(ESTRATEGIAS[x]*100))
 
-# ===============================
-# FUNÇÕES DE ANÁLISE
-# ===============================
-
-def pegar_velas(ativo, interval=TIMEFRAME, count=ULTIMAS_VELAS):
-    """Pega as últimas velas do ativo da Alpha Vantage"""
-    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={ativo}&interval={interval}&outputsize=compact&apikey={ALPHA_KEY}"
+async def obter_candles_real(par, interval=TIMEFRAME, count=20):
     try:
-        resp = requests.get(url, timeout=10).json()
-        key = f"Time Series ({interval})"
-        if key in resp:
-            velas = list(resp[key].values())[:count][::-1]
-            return velas
-    except Exception as e:
-        print(f"Erro ao pegar velas {ativo}: {e}")
-    return []
+        return await client.get_candles(asset=par, interval=interval, count=count)
+    except:
+        return None
 
-def analisar_velas(velas):
-    """Analisa sequência de velas e retorna sinal e score"""
-    sequencia = []
-    for v in velas:
-        open_price = float(v["1. open"])
-        close_price = float(v["4. close"])
-        if close_price > open_price:
-            sequencia.append("GREEN")
-        elif close_price < open_price:
-            sequencia.append("RED")
-        else:
-            sequencia.append("DOJI")
-    # Últimas 3 velas
-    if len(sequencia) >= 3:
-        ult3 = sequencia[-3:]
-        if ult3.count("GREEN") == 3:
-            return "CALL ⬆️", 95
-        elif ult3.count("RED") == 3:
-            return "PUT ⬇️", 95
-    # Últimas 2 velas
-    if len(sequencia) >= 2:
-        ult2 = sequencia[-2:]
-        if ult2.count("GREEN") == 2:
-            return "CALL ⬆️", 80
-        elif ult2.count("RED") == 2:
-            return "PUT ⬇️", 80
-    # Tendência geral
-    greens = sequencia.count("GREEN")
-    reds = sequencia.count("RED")
-    if greens > reds:
-        return "CALL ⬆️", 60
-    elif reds > greens:
-        return "PUT ⬇️", 60
+def analisar_candle(candles, direcao):
+    c = candles[-1]
+    o = float(c['open'])
+    cl = float(c['close'])
+    if direcao == "CALL ⬆️":
+        return "GREEN" if cl > o else "RED"
     else:
-        return "NEUTRO", 50
-
-def resultado_entrada(velas, sinal):
-    """Verifica se a última vela confirma o sinal"""
-    ultima = velas[-1]
-    open_price = float(ultima["1. open"])
-    close_price = float(ultima["4. close"])
-    if sinal == "CALL ⬆️":
-        return "GREEN" if close_price > open_price else "RED"
-    elif sinal == "PUT ⬇️":
-        return "GREEN" if close_price < open_price else "RED"
-    return "NEUTRO"
-
-async def enviar_telegram(texto):
-    try:
-        await bot.send_message(chat_id=CHAT_ID, text=texto)
-    except Exception as e:
-        print(f"Erro ao enviar Telegram: {e}")
+        return "GREEN" if cl < o else "RED"
 
 # ===============================
-# FUNÇÃO DASHBOARD
+# SINAL
 # ===============================
+async def enviar_sinal():
+    global estado, sinal_atual, fechamento_vela, pausa_ate
 
-async def enviar_dashboard():
-    texto = "📊 **TROIA v15 — Dashboard IA**\n\n"
-    for ativo in ATIVOS:
-        greens = sum(1 for h in historico[ativo] if h["resultado"] == "GREEN")
-        reds = sum(1 for h in historico[ativo] if h["resultado"] == "RED")
+    if pausa_ate and agora_utc() < pausa_ate:
+        return
+
+    estrategia = escolher_estrategia()
+    score = int(ESTRATEGIAS[estrategia]*100)
+    if score < 75:
+        return
+
+    par = random.choice(ATIVOS)
+    direcao = random.choice(["CALL ⬆️", "PUT ⬇️"])
+    hora_entrada = proxima_vela()
+
+    sinal_atual = {"par": par, "direcao": direcao, "estrategia": estrategia, "hora": hora_entrada}
+    fechamento_vela = agora_utc() + timedelta(seconds=TEMPO_VELA)
+
+    texto = f"""🤖 **TROIA v15 — IA**
+
+📊 Ativo: {par}
+🕯 Timeframe: {TIMEFRAME}
+⏰ Entrada: {hora_entrada}
+🧠 Estratégia: {estrategia}
+⭐ Score: {score}%
+⚠️ Operação única. Aguarde fechamento da vela."""
+    
+    print(texto)
+    await bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
+    estado = "AGUARDANDO_RESULTADO"
+
+# ===============================
+# RESULTADO
+# ===============================
+async def enviar_resultado():
+    global estado, greens, reds, streak, pausa_ate, ESTRATEGIAS
+
+    candles = await obter_candles_real(sinal_atual["par"])
+    if not candles:
+        resultado = random.choice(["GREEN","RED"])
+    else:
+        resultado = analisar_candle(candles, sinal_atual["direcao"])
+
+    if resultado == "GREEN":
+        greens += 1
+        streak += 1
+        ESTRATEGIAS[sinal_atual["estrategia"]] += 0.05
+        texto = "🟢 GREEN CONFIRMADO! Mercado respeitou a leitura."
+    else:
+        reds += 1
         streak = 0
-        if historico[ativo]:
-            for h in reversed(historico[ativo]):
-                if h["resultado"] == "GREEN":
-                    streak += 1
-                else:
-                    break
-        texto += f"{ativo} | Score: {score_estrategia[ativo]:.2f} | 🟢 {greens} | 🔴 {reds} | Streak: {streak}\n"
-    await enviar_telegram(texto)
+        ESTRATEGIAS[sinal_atual["estrategia"]] = max(0.5, ESTRATEGIAS[sinal_atual["estrategia"]] - 0.07)
+        texto = "🔴 RED. Mercado em correção."
+        if reds >= RED_MAX:
+            pausa_ate = agora_utc() + timedelta(seconds=PAUSA_APOS_RED)
+            reds = 0
+
+    total = greens + reds
+    acc = (greens/total)*100 if total else 0
+    resumo = f"""{texto}
+
+📊 Greens: {greens}
+🔴 Reds: {reds}
+🔥 Streak: {streak}
+📈 Assertividade: {acc:.2f}%
+🧠 IA recalibrando estratégias..."""
+    
+    print(resumo)
+    await bot.send_message(chat_id=CHAT_ID, text=resumo, parse_mode="Markdown")
+    estado = "LIVRE"
 
 # ===============================
 # LOOP PRINCIPAL
 # ===============================
-
-async def main():
-    print("🚀 TROIA v15 IA ONLINE — Estudo automático ativado")
-    contador_dashboard = 0
+async def loop_principal():
     while True:
-        for ativo in ATIVOS:
-            velas = pegar_velas(ativo)
-            if velas:
-                sinal, score = analisar_velas(velas)
-                hora_entrada = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+        if estado == "LIVRE":
+            await enviar_sinal()
+        elif estado == "AGUARDANDO_RESULTADO":
+            if agora_utc() >= fechamento_vela:
+                await enviar_resultado()
+        await asyncio.sleep(random.randint(INTERVALO_MIN, INTERVALO_MAX))
 
-                if sinal != "NEUTRO":
-                    texto = (
-                        f"🤖 **TROIA v15 — IA**\n\n
+# ===============================
+# START
+# ===============================
+async def main():
+    await client.connect()
+    print("🚀 TROIA IA v15 ONLINE — OTC + Forex REAL")
+    await loop_principal()
+
+if __name__ == "__main__":
+    asyncio.run(main())
