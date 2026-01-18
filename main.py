@@ -1,12 +1,11 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
-from telegram import Bot
-from telegram.ext import ApplicationBuilder, CallbackContext
-import requests
+from telegram.ext import ApplicationBuilder, ContextTypes, CallbackContext
 import random
+import requests
 
 # =============================== CONFIGURAÇÃO ===============================
-ALPHA_KEY = "3SYERLAJ3ZAT69TM"  # Sua API Key Alpha Vantage
+ALPHA_KEY = "3SYERLAJ3ZAT69TM"
 TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
 CHAT_ID = 2055716345
 
@@ -15,7 +14,6 @@ TEMPO_VELA = 60
 PAUSA_APOS_RED = 600
 RED_MAX = 3
 
-# Ativos OTC + Forex + Cripto
 ATIVOS = [
     "EURUSD","GBPUSD","USDJPY","AUDUSD","NZDUSD",
     "EURJPY","GBPJPY","EURGBP","USDCAD",
@@ -38,10 +36,7 @@ estrategias = {
     "Micro Tendência": 1.0
 }
 
-bot = Bot(token=TOKEN)
-
 # =============================== FUNÇÕES ===============================
-
 def agora_utc():
     return datetime.now(timezone.utc)
 
@@ -56,9 +51,6 @@ def escolher_estrategia():
     return max(estrategias, key=score_estrategia)
 
 def obter_candle_alpha(ativo):
-    """
-    Pega o candle mais recente da Alpha Vantage (1min ou intraday)
-    """
     url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={ativo}&interval=1min&apikey={ALPHA_KEY}"
     try:
         resp = requests.get(url, timeout=10)
@@ -68,18 +60,11 @@ def obter_candle_alpha(ativo):
             return None
         ultimo = times[0]
         candle = data["Time Series (1min)"][ultimo]
-        return {
-            "open": float(candle["1. open"]),
-            "close": float(candle["4. close"])
-        }
-    except Exception as e:
-        print(f"Erro ao pegar candle {ativo}: {e}")
+        return {"open": float(candle["1. open"]), "close": float(candle["4. close"])}
+    except:
         return None
 
 def analisar_candle(candle, direcao):
-    """
-    Retorna GREEN ou RED baseado no candle
-    """
     o = candle['open']
     cl = candle['close']
     if direcao == "CALL ⬆️":
@@ -88,8 +73,7 @@ def analisar_candle(candle, direcao):
         return "GREEN" if cl < o else "RED"
 
 # =============================== SINAL ===============================
-
-async def enviar_sinal():
+async def enviar_sinal(context: ContextTypes.DEFAULT_TYPE):
     global estado, sinal_atual, fechamento_vela, pausa_ate
 
     if pausa_ate and agora_utc() < pausa_ate:
@@ -118,12 +102,11 @@ async def enviar_sinal():
         "⚠️ Operação única. Aguarde o fechamento."
     )
 
-    await bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
     estado = "AGUARDANDO_RESULTADO"
 
 # =============================== RESULTADO ===============================
-
-async def enviar_resultado():
+async def enviar_resultado(context: ContextTypes.DEFAULT_TYPE):
     global estado, greens, reds, streak, pausa_ate
 
     candle = obter_candle_alpha(sinal_atual["par"])
@@ -157,22 +140,21 @@ async def enviar_resultado():
         "🧠 IA recalibrando estratégias..."
     )
 
-    await bot.send_message(chat_id=CHAT_ID, text=resumo, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=CHAT_ID, text=resumo, parse_mode="Markdown")
     estado = "LIVRE"
 
-# =============================== LOOP ===============================
-
+# =============================== LOOP PRINCIPAL ===============================
 async def loop_principal(context: CallbackContext):
     if estado == "LIVRE":
-        await enviar_sinal()
+        await enviar_sinal(context)
     elif estado == "AGUARDANDO_RESULTADO":
         if agora_utc() >= fechamento_vela:
-            await enviar_resultado()
+            await enviar_resultado(context)
 
 # =============================== START ===============================
-
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
+    # Job que roda a cada INTERVALO_LOOP segundos
     app.job_queue.run_repeating(loop_principal, interval=INTERVALO_LOOP, first=10)
     print("🚀 TROIA IA v11 ONLINE — Alpha Vantage + Telegram")
     await app.run_polling()
