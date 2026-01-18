@@ -1,8 +1,8 @@
 import asyncio
 import random
 from datetime import datetime, timedelta, timezone
+import requests
 from telegram import Bot
-from api_quotex import Quotex
 
 # ===============================
 # CONFIGURAÇÃO
@@ -10,13 +10,11 @@ from api_quotex import Quotex
 TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
 CHAT_ID = 2055716345
 
-ALPHA_KEY = "3SYERLAJ3ZAT69TM"  # Caso queira integrar Alpha
-TIMEFRAME = "1m"
-INTERVALO_MIN = 180  # 3 minutos
-INTERVALO_MAX = 300  # 5 minutos
+ALPHA_KEY = "3SYERLAJ3ZAT69TM"
+TIMEFRAME = "1min"  # Alpha Vantage usa 1min, 5min, 15min, etc.
+INTERVALO_MIN = 180
+INTERVALO_MAX = 300
 TEMPO_VELA = 60  # segundos
-RED_MAX = 3
-PAUSA_APOS_RED = 600  # segundos
 
 ATIVOS = [
     "AUDCAD","AUDCHF","AUDJPY","AUDNZD","AUDSGD","AUDUSD",
@@ -46,7 +44,6 @@ reds = 0
 streak = 0
 
 bot = Bot(token=TOKEN)
-client = Quotex()  # já inicializado sem email/senha, usando API real
 
 # ===============================
 # FUNÇÕES AUXILIARES
@@ -61,16 +58,22 @@ def proxima_vela():
 def escolher_estrategia():
     return max(ESTRATEGIAS, key=lambda x: int(ESTRATEGIAS[x]*100))
 
-async def obter_candles_real(par, interval=TIMEFRAME, count=20):
+async def obter_candles_alpha(par, interval=TIMEFRAME, count=20):
     try:
-        return await client.get_candles(asset=par, interval=interval, count=count)
+        url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={par[:3]}&to_symbol={par[3:]}&interval={interval}&apikey={ALPHA_KEY}&outputsize=compact"
+        r = requests.get(url)
+        data = r.json()
+        time_series = data.get(f"Time Series FX ({interval})", {})
+        candles = list(time_series.items())[:count]
+        candles.reverse()  # do mais antigo para o mais recente
+        return [{"open": float(c[1]["1. open"]), "close": float(c[1]["4. close"])} for c in candles]
     except:
         return None
 
 def analisar_candle(candles, direcao):
     c = candles[-1]
-    o = float(c['open'])
-    cl = float(c['close'])
+    o = c['open']
+    cl = c['close']
     if direcao == "CALL ⬆️":
         return "GREEN" if cl > o else "RED"
     else:
@@ -105,7 +108,7 @@ async def enviar_sinal():
 🧠 Estratégia: {estrategia}
 ⭐ Score: {score}%
 ⚠️ Operação única. Aguarde fechamento da vela."""
-    
+
     print(texto)
     await bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
     estado = "AGUARDANDO_RESULTADO"
@@ -116,7 +119,7 @@ async def enviar_sinal():
 async def enviar_resultado():
     global estado, greens, reds, streak, pausa_ate, ESTRATEGIAS
 
-    candles = await obter_candles_real(sinal_atual["par"])
+    candles = await obter_candles_alpha(sinal_atual["par"])
     if not candles:
         resultado = random.choice(["GREEN","RED"])
     else:
@@ -132,8 +135,8 @@ async def enviar_resultado():
         streak = 0
         ESTRATEGIAS[sinal_atual["estrategia"]] = max(0.5, ESTRATEGIAS[sinal_atual["estrategia"]] - 0.07)
         texto = "🔴 RED. Mercado em correção."
-        if reds >= RED_MAX:
-            pausa_ate = agora_utc() + timedelta(seconds=PAUSA_APOS_RED)
+        if reds >= 3:
+            pausa_ate = agora_utc() + timedelta(seconds=600)
             reds = 0
 
     total = greens + reds
@@ -145,7 +148,7 @@ async def enviar_resultado():
 🔥 Streak: {streak}
 📈 Assertividade: {acc:.2f}%
 🧠 IA recalibrando estratégias..."""
-    
+
     print(resumo)
     await bot.send_message(chat_id=CHAT_ID, text=resumo, parse_mode="Markdown")
     estado = "LIVRE"
@@ -166,8 +169,7 @@ async def loop_principal():
 # START
 # ===============================
 async def main():
-    await client.connect()
-    print("🚀 TROIA IA v15 ONLINE — OTC + Forex REAL")
+    print("🚀 TROIA IA v15 ONLINE — Forex REAL (Alpha Vantage)")
     await loop_principal()
 
 if __name__ == "__main__":
