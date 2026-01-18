@@ -1,30 +1,19 @@
 import asyncio
+import random
 from datetime import datetime, timedelta, timezone
+import requests
 from telegram import Bot
 from telegram.ext import ApplicationBuilder, CallbackContext
-from api_public import PublicAPI
-import random
 
 # ================= CONFIGURAÇÃO =================
 TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
 CHAT_ID = 2055716345
-API_KEY = "3SYERLAJ3ZAT69TM"
+ALPHA_API_KEY = "3SYERLAJ3ZAT69TM"
 
-INTERVALO_LOOP = 30  # Segundos entre checagem
-TEMPO_VELA = 1       # minutos
-PAUSA_APOS_RED = 600
+INTERVALO_LOOP = 30         # segundos entre cada checagem
+TEMPO_VELA = 60             # duração da vela
+PAUSA_APOS_RED = 600        # pausa após reds consecutivos
 RED_MAX = 3
-
-# ================= LISTA COMPLETA DE ATIVOS FOREX =================
-ATIVOS = [
-    "EUR/USD","GBP/USD","USD/JPY","AUD/USD","NZD/USD",
-    "EUR/JPY","GBP/JPY","EUR/GBP","USD/CAD","USD/CHF",
-    "AUD/JPY","AUD/GBP","AUD/CAD","AUD/CHF",
-    "CAD/JPY","CAD/CHF","CHF/JPY",
-    "EUR/AUD","EUR/CAD","EUR/CHF","EUR/NZD",
-    "GBP/AUD","GBP/CAD","GBP/CHF","GBP/NZD",
-    "NZD/JPY","NZD/CAD","NZD/CHF"
-]
 
 # ================= ESTADO =================
 estado = "LIVRE"
@@ -43,14 +32,13 @@ estrategias = {
 }
 
 bot = Bot(token=TOKEN)
-client = PublicAPI(API_KEY)
 
 # ================= FUNÇÕES =================
 def agora_utc():
     return datetime.now(timezone.utc)
 
 def proxima_vela():
-    t = agora_utc() + timedelta(minutes=TEMPO_VELA)
+    t = agora_utc() + timedelta(seconds=TEMPO_VELA)
     return t.replace(second=0).strftime("%H:%M")
 
 def score_estrategia(nome):
@@ -59,10 +47,56 @@ def score_estrategia(nome):
 def escolher_estrategia():
     return max(estrategias, key=score_estrategia)
 
-async def obter_candles_real(par, interval=TEMPO_VELA):
+# TODOS OS ATIVOS Forex + Cripto + Commodities da Alpha Vantage
+def ativos_alpha():
+    forex = [
+        "EURUSD","GBPUSD","USDJPY","AUDUSD","NZDUSD",
+        "EURJPY","GBPJPY","EURGBP","USDCAD","USDCHF"
+    ]
+    crypto = [
+        "BTCUSD","ETHUSD","LTCUSD","XRPUSD","BCHUSD",
+        "ADAUSD","DOTUSD","LINKUSD","DOGEUSD"
+    ]
+    commodities = [
+        "XAUUSD","XAGUSD","WTI","BRENT","NG"
+    ]
+    return forex + crypto + commodities
+
+# Obter candles via Alpha Vantage
+async def obter_candles_alpha(par, interval=1):
+    """
+    Retorna últimos 2 candles (open, close)
+    interval em minutos
+    """
     try:
-        return await client.get_candles(par, interval=interval, count=2)
-    except:
+        if par in ["BTCUSD","ETHUSD","LTCUSD","XRPUSD","BCHUSD","ADAUSD","DOTUSD","LINKUSD","DOGEUSD"]:
+            # Cripto usa CRYPTO_INTRADAY
+            url = f"https://www.alphavantage.co/query?function=CRYPTO_INTRADAY&symbol={par[:3]}&market=USD&interval={interval}min&apikey={ALPHA_API_KEY}&outputsize=compact"
+        elif par in ["XAUUSD","XAGUSD","WTI","BRENT","NG"]:
+            # Commodities podem usar FX_INTRADAY (simulação simplificada)
+            url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={par[:3]}&to_symbol=USD&interval={interval}min&apikey={ALPHA_API_KEY}&outputsize=compact"
+        else:
+            # Forex
+            url = f"https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol={par[:3]}&to_symbol={par[3:]}&interval={interval}min&apikey={ALPHA_API_KEY}&outputsize=compact"
+
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        # Pega o time series correto
+        ts_keys = [k for k in data.keys() if "Time Series" in k]
+        if not ts_keys:
+            return None
+        key = ts_keys[0]
+        times = sorted(data[key].keys())
+        if len(times) < 2:
+            return None
+        c1, c2 = times[-2], times[-1]
+        candles = [
+            {"open": float(data[key][c1]["1. open"]), "close": float(data[key][c1]["4. close"])},
+            {"open": float(data[key][c2]["1. open"]), "close": float(data[key][c2]["4. close"])}
+        ]
+        return candles
+    except Exception as e:
+        print("Erro Alpha:", e)
         return None
 
 def analisar_candle(candles, direcao):
@@ -86,12 +120,13 @@ async def enviar_sinal():
     if score < 75:
         return
 
-    par = random.choice(ATIVOS)
+    ativos = ativos_alpha()
+    par = random.choice(ativos)
     direcao = random.choice(["CALL ⬆️", "PUT ⬇️"])
     entrada = proxima_vela()
 
     sinal_atual = {"par": par, "direcao": direcao, "estrategia": estrategia}
-    fechamento_vela = agora_utc() + timedelta(minutes=TEMPO_VELA)
+    fechamento_vela = agora_utc() + timedelta(seconds=TEMPO_VELA)
 
     texto = (
         "🤖 **IAQuotex Sinais — TROIA v11**\n\n"
@@ -111,7 +146,7 @@ async def enviar_sinal():
 async def enviar_resultado():
     global estado, greens, reds, streak, pausa_ate
 
-    candles = await obter_candles_real(sinal_atual["par"])
+    candles = await obter_candles_alpha(sinal_atual["par"])
     if not candles:
         resultado = random.choice(["GREEN", "RED"])
     else:
@@ -157,7 +192,7 @@ async def loop_principal(context: CallbackContext):
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.job_queue.run_repeating(loop_principal, interval=INTERVALO_LOOP, first=10)
-    print("🚀 TROIA IA v11 ONLINE — Forex REAL via Alpha Vantage")
+    print("🚀 TROIA IA v11 ONLINE — Forex + Cripto + Commodities via Alpha Vantage")
     await app.run_polling()
 
 if __name__ == "__main__":
