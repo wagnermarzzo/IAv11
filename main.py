@@ -1,12 +1,11 @@
 # main.py
 import asyncio
-import subprocess
 import sys
+import subprocess
 from datetime import datetime
-import json
 
 # ===============================
-# INSTALAÇÃO AUTOMÁTICA DE BIBLIOTECAS
+# INSTALAÇÃO AUTOMÁTICA DE BIBLIOTECAS (caso não esteja no ambiente)
 # ===============================
 def instalar(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
@@ -14,7 +13,7 @@ def instalar(pkg):
 try:
     from pyquotex.stable_api import Quotex
 except ImportError:
-    instalar("pyquotex")
+    instalar("git+https://github.com/cleitonleonel/pyquotex.git")
     from pyquotex.stable_api import Quotex
 
 try:
@@ -26,20 +25,20 @@ except ImportError:
 # ===============================
 # CONFIGURAÇÃO
 # ===============================
-TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"   # Seu token do Telegram
-CHAT_ID = "2055716345"                            # Seu chat ID do Telegram
-TIMEFRAME = 60                                    # Velas de 1min no PyQuotex
-EMAIL = "apgwagner2@gmail.com"                   # Seu email da Quotex
-PASSWORD = "@Aa88691553"                       # Sua senha da Quotex
+TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"  # Seu token do Telegram
+CHAT_ID = "2055716345"                           # Seu chat ID do Telegram
+TIMEFRAME = 60                                   # 1 minuto
+EMAIL = "apgwagner2@gmail.com"                 # Seu email da Quotex
+PASSWORD = "@Aa88691553"                     # Sua senha da Quotex
 
 bot = Bot(token=TOKEN)
 
-# Lista de ativos que você quer monitorar
-# Inclui OTC e ativos suportados (ex.: EURUSD_otc, GBPUSD_otc, etc.)
+# ===============================
+# ATIVOS (incluindo OTC)
+# ===============================
 ASSETS = [
-    "EURUSD_otc", "GBPUSD_otc", "AUDUSD_otc", "USDJPY_otc",
-    "USDBRL_otc", "EURGBP_otc", "USDCHF_otc", "USDVND_otc",
-    "USDZAR_otc", "EURUSD", "GBPUSD", "AUDUSD", "USDJPY"
+    "EURUSD", "EURUSD_otc", "GBPUSD", "GBPUSD_otc", "AUDUSD", "AUDUSD_otc", "USDJPY", "USDJPY_otc",
+    "USDBRL", "USDBRL_otc", "EURGBP", "EURGBP_otc", "USDCHF", "USDCHF_otc", "USDVND_otc", "USDZAR_otc"
 ]
 
 # ===============================
@@ -59,16 +58,17 @@ async def enviar_sinal_par(par, candle):
     )
     await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
 
+
 async def monitorar_mercado():
-    # Conecta e autentica no Quotex
+    # Conecta e autentica na Quotex
     client = Quotex(email=EMAIL, password=PASSWORD, lang="en")
     success, msg = await client.connect()
     if not success:
         print("Erro ao conectar:", msg)
         return
 
-    print("Conectado no Quotex com sucesso!")
-    
+    print("Conectado na Quotex com sucesso!")
+
     # Inscreve para receber dados de velas de todos os ativos
     for asset in ASSETS:
         await client.subscribe_candles(asset=asset, period=TIMEFRAME)
@@ -76,13 +76,12 @@ async def monitorar_mercado():
     # Dicionário para guardar últimas velas
     candles = {asset: [] for asset in ASSETS}
 
-    # Loop principal de dados
+    # Loop principal de recebimento de dados
     async for item in client.iter_candles_stream():
         par = item.get("asset")
         if par not in candles:
             continue
 
-        # Monta candle em formato legível
         candle = {
             "open": item.get("open"),
             "high": item.get("high"),
@@ -90,14 +89,14 @@ async def monitorar_mercado():
             "close": item.get("close"),
             "time": item.get("from")
         }
+
         candles[par].append(candle)
         if len(candles[par]) > 20:
             candles[par].pop(0)
 
-        # Envia sinal para cada nova vela
+        # Envia cada vela recebida para Telegram
         await enviar_sinal_par(par, candle)
 
-    await client.close()
 
 async def main():
     while True:
@@ -105,7 +104,9 @@ async def main():
             await monitorar_mercado()
         except Exception as e:
             print("Erro no loop principal:", e)
+            print("Reconectando em 5 segundos...")
             await asyncio.sleep(5)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
