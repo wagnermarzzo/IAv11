@@ -1,17 +1,37 @@
 # main.py
 import asyncio
+import random
+import subprocess
+import sys
 from datetime import datetime
-from alpha_vantage.foreignexchange import ForeignExchange
-from telegram import Bot
+
+# ===============================
+# INSTALAÇÃO AUTOMÁTICA DE BIBLIOTECAS
+# ===============================
+# Isso garante que as bibliotecas necessárias estejam instaladas antes de rodar
+def instalar(pkg):
+    subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
+
+try:
+    from alpha_vantage.foreignexchange import ForeignExchange
+except ImportError:
+    instalar("alpha_vantage")
+    from alpha_vantage.foreignexchange import ForeignExchange
+
+try:
+    from telegram import Bot
+except ImportError:
+    instalar("python-telegram-bot")
+    from telegram import Bot
 
 # ===============================
 # CONFIGURAÇÃO
 # ===============================
-ALPHA_KEY = "3SYERLAJ3ZAT69TM"          # Sua Alpha Vantage Key
-TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"  # Seu token do Telegram
-CHAT_ID = "2055716345"                  # Seu chat ID no Telegram
-TIMEFRAME = "1min"                      # Timeframe 1m
-VELAS_ANALISE = 20                       # Últimas 20 velas
+ALPHA_KEY = "3SYERLAJ3ZAT69TM"                     # Sua Alpha Vantage Key
+TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"    # Seu token do Telegram
+CHAT_ID = "2055716345"                             # Seu chat ID no Telegram
+TIMEFRAME = "1min"                                 # Timeframe 1m
+VELAS_ANALISE = 20                                  # Últimas 20 velas
 
 # Inicializa cliente Alpha
 fx = ForeignExchange(key=ALPHA_KEY, output_format='json')
@@ -90,8 +110,10 @@ async def main():
             if sinal != "NEUTRO":
                 await enviar_sinal(sinal, par)
 
-        # Espera 60 segundos para próxima análise
-        await asyncio.sleep(60)
+        # Espera de 10 a 20 minutos para próxima análise
+        espera = random.randint(600, 1200)  # 600s = 10min, 1200s = 20min
+        print(f"Próxima análise em {espera // 60} minutos")
+        await asyncio.sleep(espera)
 
 if __name__ == "__main__":
     asyncio.run(main())
