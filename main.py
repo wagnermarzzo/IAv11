@@ -1,85 +1,63 @@
-import asyncio
-import json
-import websockets
-from datetime import datetime
+import time
+import requests
 import telebot
+import asyncio
+import websockets
 
 # ===============================
-# CONFIGURAÇÃO (DADOS INCLUÍDOS)
+# CONFIGURAÇÃO (hardcoded)
 # ===============================
-TELEGRAM_TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
-CHAT_ID = "2055716345"
+TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"  # Seu token real
+CHAT_ID = "2055716345"                                     # Seu chat id real
+EMAIL = "apgwagner2@gmail.com"
+SENHA = "@Aa88691553"
 
-QUOTEX_EMAIL = "apgwagner2@gmail.com"
-QUOTEX_PASSWORD = "@Aa88691553"
+# Intervalo entre verificações (segundos)
+INTERVALO = 60  
 
-# Ativos e OTC
-ASSETS = [
+# Lista de ativos válidos (WebSocket)
+ATIVOS = [
     "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD",
     "EURJPY", "GBPJPY", "EURGBP",
-    "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC",
-    "USDBRL", "USDBRL-OTC", "USDCHF", "USDCHF-OTC", "USDZAR", "USDZAR-OTC",
-    "USDSGD", "USDSGD-OTC", "GBPUSD-OTC", "EURUSD-OTC"
+    "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC",
+    "AUDUSD-OTC", "EURJPY-OTC", "GBPJPY-OTC"
 ]
 
-INTERVAL = 60  # Intervalo em segundos
+# Inicializa o bot do Telegram
+bot = telebot.TeleBot(TOKEN, threaded=False)
 
 # ===============================
-# BOT TELEGRAM
+# FUNÇÃO DE ALERTA NO TELEGRAM
 # ===============================
-bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
-
-def send_telegram(message):
+def enviar_mensagem(texto):
     try:
-        bot.send_message(CHAT_ID, message)
-        print(f"[Telegram] Enviado: {message}")
+        bot.send_message(CHAT_ID, texto)
+        print(f"[TELEGRAM] {texto}")
     except Exception as e:
-        print(f"[Telegram] Erro ao enviar: {e}")
+        print(f"[ERRO TELEGRAM] {e}")
 
 # ===============================
-# CONEXÃO QUOTEX
+# FUNÇÃO DE CONEXÃO WEBSOCKET
 # ===============================
-async def connect_asset(asset):
-    # Formato seguro de WebSocket
-    uri = f"wss://realtime.quotex.io/{asset}"
+async def monitor_ativo(ativo):
+    uri = f"wss://qxbroker.com/realtime/{ativo}"  # ws ou wss obrigatório
     while True:
         try:
             async with websockets.connect(uri) as ws:
-                print(f"[{asset}] Conectado ao WebSocket.")
-                send_telegram(f"✅ Conectado ao {asset}")
-                while True:
-                    data = await ws.recv()
-                    process_data(asset, data)
+                await ws.send("ping")
+                resp = await ws.recv()
+                enviar_mensagem(f"Conexão OK: {ativo} → {resp}")
+                await asyncio.sleep(INTERVALO)
         except Exception as e:
-            print(f"[{asset}] Erro: {e}. Reconectando em 5s...")
+            print(f"Erro no {ativo}: {e}. Reconectando em 5s...")
             await asyncio.sleep(5)
 
 # ===============================
-# PROCESSAMENTO DE DADOS
-# ===============================
-def process_data(asset, data):
-    try:
-        info = json.loads(data)
-        signal = None
-        if "candle" in info:
-            candle = info["candle"]
-            if candle["close"] > candle["open"]:
-                signal = "CALL"
-            elif candle["close"] < candle["open"]:
-                signal = "PUT"
-
-        if signal:
-            msg = f"[{asset}] Sinal: {signal} - {datetime.now().strftime('%H:%M:%S')}"
-            print(msg)
-            send_telegram(msg)
-    except Exception as e:
-        print(f"[{asset}] Erro no processamento: {e}")
-
-# ===============================
-# LOOP PRINCIPAL
+# FUNÇÃO PRINCIPAL
 # ===============================
 async def main():
-    tasks = [connect_asset(asset) for asset in ASSETS]
+    enviar_mensagem("Bot iniciado ✅")
+    tasks = [monitor_ativo(ativo) for ativo in ATIVOS]
     await asyncio.gather(*tasks)
 
 # ===============================
@@ -89,4 +67,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("Bot encerrado manualmente.")
+        print("Bot interrompido manualmente.")
