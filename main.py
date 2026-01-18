@@ -1,27 +1,29 @@
 import asyncio
-import logging
 from datetime import datetime, timedelta, timezone
-import random
-
 from telegram import Bot
 from telegram.ext import ApplicationBuilder, CallbackContext
-
-from api_quotex import Quotex
+from api_public import PublicAPI
+import random
 
 # ================= CONFIGURAÇÃO =================
 TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
 CHAT_ID = 2055716345
+API_KEY = "3SYERLAJ3ZAT69TM"
 
-INTERVALO_LOOP = 30      # em segundos
-TEMPO_VELA = 60          # duração da vela em segundos
-PAUSA_APOS_RED = 600     # pausa após RED_MAX reds seguidos
-RED_MAX = 3              # número máximo de reds antes da pausa
+INTERVALO_LOOP = 30  # Segundos entre checagem
+TEMPO_VELA = 1       # minutos
+PAUSA_APOS_RED = 600
+RED_MAX = 3
 
+# ================= LISTA COMPLETA DE ATIVOS FOREX =================
 ATIVOS = [
-    "EURUSD-OTC","GBPUSD-OTC","USDJPY-OTC","AUDUSD-OTC","NZDUSD-OTC",
-    "EURJPY-OTC","GBPJPY-OTC","EURGBP-OTC","USDCAD-OTC",
     "EUR/USD","GBP/USD","USD/JPY","AUD/USD","NZD/USD",
-    "EUR/JPY","GBP/JPY","EUR/GBP","USD/CAD"
+    "EUR/JPY","GBP/JPY","EUR/GBP","USD/CAD","USD/CHF",
+    "AUD/JPY","AUD/GBP","AUD/CAD","AUD/CHF",
+    "CAD/JPY","CAD/CHF","CHF/JPY",
+    "EUR/AUD","EUR/CAD","EUR/CHF","EUR/NZD",
+    "GBP/AUD","GBP/CAD","GBP/CHF","GBP/NZD",
+    "NZD/JPY","NZD/CAD","NZD/CHF"
 ]
 
 # ================= ESTADO =================
@@ -32,7 +34,6 @@ pausa_ate = None
 greens = 0
 reds = 0
 streak = 0
-ultima_entrada = None
 
 estrategias = {
     "Tendência": 1.0,
@@ -41,24 +42,16 @@ estrategias = {
     "Micro Tendência": 1.0
 }
 
-# ================= LOG =================
-logging.basicConfig(level=logging.INFO)
-
-# ================= INICIALIZAÇÃO BOT =================
 bot = Bot(token=TOKEN)
-client = Quotex()  # já com email e senha dentro da classe
+client = PublicAPI(API_KEY)
 
 # ================= FUNÇÕES =================
 def agora_utc():
     return datetime.now(timezone.utc)
 
 def proxima_vela():
-    agora = agora_utc()
-    segundos_passados = agora.minute * 60 + agora.second
-    proximo_inicio = (segundos_passados // TEMPO_VELA + 1) * TEMPO_VELA
-    diff = proximo_inicio - segundos_passados
-    t = agora + timedelta(seconds=diff)
-    return t.strftime("%H:%M")
+    t = agora_utc() + timedelta(minutes=TEMPO_VELA)
+    return t.replace(second=0).strftime("%H:%M")
 
 def score_estrategia(nome):
     return int(estrategias[nome] * 100)
@@ -68,10 +61,8 @@ def escolher_estrategia():
 
 async def obter_candles_real(par, interval=TEMPO_VELA):
     try:
-        candles = await asyncio.to_thread(client.get_candles, asset=par, interval=interval, count=2)
-        return candles
-    except Exception as e:
-        logging.error(f"Erro ao obter candles de {par}: {e}")
+        return await client.get_candles(par, interval=interval, count=2)
+    except:
         return None
 
 def analisar_candle(candles, direcao):
@@ -85,7 +76,7 @@ def analisar_candle(candles, direcao):
 
 # ================= SINAL =================
 async def enviar_sinal():
-    global estado, sinal_atual, fechamento_vela, pausa_ate, ultima_entrada
+    global estado, sinal_atual, fechamento_vela, pausa_ate
 
     if pausa_ate and agora_utc() < pausa_ate:
         return
@@ -99,12 +90,8 @@ async def enviar_sinal():
     direcao = random.choice(["CALL ⬆️", "PUT ⬇️"])
     entrada = proxima_vela()
 
-    if ultima_entrada == entrada and sinal_atual:
-        return
-    ultima_entrada = entrada
-
     sinal_atual = {"par": par, "direcao": direcao, "estrategia": estrategia}
-    fechamento_vela = agora_utc() + timedelta(seconds=TEMPO_VELA)
+    fechamento_vela = agora_utc() + timedelta(minutes=TEMPO_VELA)
 
     texto = (
         "🤖 **IAQuotex Sinais — TROIA v11**\n\n"
@@ -119,7 +106,6 @@ async def enviar_sinal():
 
     await bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
     estado = "AGUARDANDO_RESULTADO"
-    logging.info(f"Sinal enviado: {sinal_atual}")
 
 # ================= RESULTADO =================
 async def enviar_resultado():
@@ -143,7 +129,6 @@ async def enviar_resultado():
         texto = "🔴 **RED.** Mercado em correção."
         if reds >= RED_MAX:
             pausa_ate = agora_utc() + timedelta(seconds=PAUSA_APOS_RED)
-            logging.info(f"Pausa ativada até {pausa_ate}")
             reds = 0
 
     total = greens + reds
@@ -159,9 +144,8 @@ async def enviar_resultado():
 
     await bot.send_message(chat_id=CHAT_ID, text=resumo, parse_mode="Markdown")
     estado = "LIVRE"
-    logging.info("Resultado enviado.")
 
-# ================= LOOP PRINCIPAL =================
+# ================= LOOP =================
 async def loop_principal(context: CallbackContext):
     if estado == "LIVRE":
         await enviar_sinal()
@@ -171,10 +155,9 @@ async def loop_principal(context: CallbackContext):
 
 # ================= START =================
 async def main():
-    await client.connect()
     app = ApplicationBuilder().token(TOKEN).build()
-    app.job_queue.run_repeating(loop_principal, interval=INTERVALO_LOOP, first=5)
-    logging.info("🚀 TROIA IA v11 ONLINE — OTC + Forex REAL")
+    app.job_queue.run_repeating(loop_principal, interval=INTERVALO_LOOP, first=10)
+    print("🚀 TROIA IA v11 ONLINE — Forex REAL via Alpha Vantage")
     await app.run_polling()
 
 if __name__ == "__main__":
