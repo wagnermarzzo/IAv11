@@ -1,2 +1,2 @@
-pyquotex
+git+https://github.com/cleitonleonel/pyquotex.git
 python-telegram-bot
