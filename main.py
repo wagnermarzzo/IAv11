@@ -1,57 +1,92 @@
 import asyncio
 import json
 import websockets
-import time
-import telegram
+from datetime import datetime
+import telebot
 
 # ===============================
-# CONFIGURAÇÃO
+# CONFIGURAÇÃO (DADOS INCLUÍDOS)
 # ===============================
-TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"   # Seu token do Telegram
-CHAT_ID = "2055716345"                                      # Seu chat ID
-RECONNECT_DELAY = 5                                         # Tempo de reconexão em segundos
+TELEGRAM_TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
+CHAT_ID = "2055716345"
 
-# Lista de todos os ativos (normais + OTC)
-ATIVOS = [
+QUOTEX_EMAIL = "apgwagner2@gmail.com"
+QUOTEX_PASSWORD = "@Aa88691553"
+
+# Ativos e OTC
+ASSETS = [
     "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD",
-    "EURJPY", "GBPJPY", "EURGBP", "USDBRL", "USDZAR",
+    "EURJPY", "GBPJPY", "EURGBP",
     "EURUSD-OTC", "GBPUSD-OTC", "USDJPY-OTC", "AUDUSD-OTC",
-    "EURJPY-OTC", "GBPJPY-OTC", "EURGBP-OTC", "USDBRL-OTC", "USDZAR-OTC"
+    "USDBRL", "USDBRL-OTC", "USDCHF", "USDCHF-OTC", "USDZAR", "USDZAR-OTC",
+    "USDSGD", "USDSGD-OTC", "GBPUSD-OTC", "EURUSD-OTC"
 ]
 
-# URL base do WebSocket
-WS_BASE = "wss://qxbroker.com/realtime/"
+INTERVAL = 60  # Intervalo em segundos
 
-# Inicializa o bot do Telegram
-bot = telegram.Bot(token=TOKEN)
+# ===============================
+# BOT TELEGRAM
+# ===============================
+bot = telebot.TeleBot(TELEGRAM_TOKEN, threaded=False)
 
-async def conectar_ativo(ativo):
-    url = WS_BASE + ativo
+def send_telegram(message):
+    try:
+        bot.send_message(CHAT_ID, message)
+        print(f"[Telegram] Enviado: {message}")
+    except Exception as e:
+        print(f"[Telegram] Erro ao enviar: {e}")
+
+# ===============================
+# CONEXÃO QUOTEX
+# ===============================
+async def connect_asset(asset):
+    # Formato seguro de WebSocket
+    uri = f"wss://realtime.quotex.io/{asset}"
     while True:
         try:
-            async with websockets.connect(url) as ws:
-                print(f"Conectado em {ativo}")
-                async for mensagem in ws:
-                    dados = json.loads(mensagem)
-                    # Aqui você pode ajustar o que quer enviar ao Telegram
-                    if "ask" in dados and "bid" in dados:
-                        preco = (dados["ask"] + dados["bid"]) / 2
-                        texto = f"{ativo} preço atual: {preco}"
-                        await enviar_telegram(texto)
+            async with websockets.connect(uri) as ws:
+                print(f"[{asset}] Conectado ao WebSocket.")
+                send_telegram(f"✅ Conectado ao {asset}")
+                while True:
+                    data = await ws.recv()
+                    process_data(asset, data)
         except Exception as e:
-            print(f"Erro no {ativo}: {e}. Reconectando em {RECONNECT_DELAY}s...")
-            await asyncio.sleep(RECONNECT_DELAY)
+            print(f"[{asset}] Erro: {e}. Reconectando em 5s...")
+            await asyncio.sleep(5)
 
-async def enviar_telegram(texto):
+# ===============================
+# PROCESSAMENTO DE DADOS
+# ===============================
+def process_data(asset, data):
     try:
-        bot.send_message(chat_id=CHAT_ID, text=texto)
+        info = json.loads(data)
+        signal = None
+        if "candle" in info:
+            candle = info["candle"]
+            if candle["close"] > candle["open"]:
+                signal = "CALL"
+            elif candle["close"] < candle["open"]:
+                signal = "PUT"
+
+        if signal:
+            msg = f"[{asset}] Sinal: {signal} - {datetime.now().strftime('%H:%M:%S')}"
+            print(msg)
+            send_telegram(msg)
     except Exception as e:
-        print(f"Erro ao enviar Telegram: {e}")
+        print(f"[{asset}] Erro no processamento: {e}")
 
+# ===============================
+# LOOP PRINCIPAL
+# ===============================
 async def main():
-    # Cria uma tarefa para cada ativo
-    tarefas = [conectar_ativo(ativo) for ativo in ATIVOS]
-    await asyncio.gather(*tarefas)
+    tasks = [connect_asset(asset) for asset in ASSETS]
+    await asyncio.gather(*tasks)
 
+# ===============================
+# EXECUÇÃO
+# ===============================
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot encerrado manualmente.")
