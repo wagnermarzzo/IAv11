@@ -29,8 +29,8 @@ except ImportError:
 TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"   # Seu token do Telegram
 CHAT_ID = "2055716345"                            # Seu chat ID do Telegram
 TIMEFRAME = 60                                    # Velas de 1min no PyQuotex
-EMAIL = "seu_email@exemplo.com"                   # Seu email da Quotex
-PASSWORD = "sua_senha_aqui"                       # Sua senha da Quotex
+EMAIL = "apgwagner2@gmail.com"                   # Seu email da Quotex
+PASSWORD = "@Aa88691553"                       # Sua senha da Quotex
 
 bot = Bot(token=TOKEN)
 
