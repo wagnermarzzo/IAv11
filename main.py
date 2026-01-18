@@ -1,10 +1,6 @@
 # main.py
 import asyncio
 from datetime import datetime
-
-# ===============================
-# IMPORTS
-# ===============================
 from pyquotex.stable_api import Quotex
 from telegram import Bot
 
@@ -27,14 +23,15 @@ ASSETS = [
     "EURUSD", "EURUSD_otc", "GBPUSD", "GBPUSD_otc",
     "AUDUSD", "AUDUSD_otc", "USDJPY", "USDJPY_otc",
     "USDBRL", "USDBRL_otc", "EURGBP", "EURGBP_otc",
-    "USDCHF", "USDCHF_otc", "USDVND_otc", "USDZAR_otc"
+    "USDCHF", "USDCHF_otc", "USDSGD", "USDSGD_otc",
+    "USDZAR", "USDZAR_otc"
 ]
 
 # ===============================
 # FUNÇÕES
 # ===============================
 
-async def enviar_sinal_par(par, candle):
+async def enviar_telegram(par, candle):
     hora = datetime.now().strftime("%H:%M:%S")
     msg = (
         f"📊 *TROIA v15 — IA*\n"
@@ -84,7 +81,7 @@ async def monitorar_mercado():
             candles[par].pop(0)
 
         # Envia cada vela recebida para Telegram
-        await enviar_sinal_par(par, candle)
+        await enviar_telegram(par, candle)
 
 
 async def main():
