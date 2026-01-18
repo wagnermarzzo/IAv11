@@ -1,22 +1,21 @@
 # main.py
 import asyncio
-import random
 import subprocess
 import sys
 from datetime import datetime
+import json
 
 # ===============================
 # INSTALAÇÃO AUTOMÁTICA DE BIBLIOTECAS
 # ===============================
-# Isso garante que as bibliotecas necessárias estejam instaladas antes de rodar
 def instalar(pkg):
     subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
 
 try:
-    from alpha_vantage.foreignexchange import ForeignExchange
+    from pyquotex.stable_api import Quotex
 except ImportError:
-    instalar("alpha_vantage")
-    from alpha_vantage.foreignexchange import ForeignExchange
+    instalar("pyquotex")
+    from pyquotex.stable_api import Quotex
 
 try:
     from telegram import Bot
@@ -27,93 +26,86 @@ except ImportError:
 # ===============================
 # CONFIGURAÇÃO
 # ===============================
-ALPHA_KEY = "3SYERLAJ3ZAT69TM"                     # Sua Alpha Vantage Key
-TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"    # Seu token do Telegram
-CHAT_ID = "2055716345"                             # Seu chat ID no Telegram
-TIMEFRAME = "1min"                                 # Timeframe 1m
-VELAS_ANALISE = 20                                  # Últimas 20 velas
+TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"   # Seu token do Telegram
+CHAT_ID = "2055716345"                            # Seu chat ID do Telegram
+TIMEFRAME = 60                                    # Velas de 1min no PyQuotex
+EMAIL = "seu_email@exemplo.com"                   # Seu email da Quotex
+PASSWORD = "sua_senha_aqui"                       # Sua senha da Quotex
 
-# Inicializa cliente Alpha
-fx = ForeignExchange(key=ALPHA_KEY, output_format='json')
-
-# Inicializa bot Telegram
 bot = Bot(token=TOKEN)
 
-# Lista de pares
-PAIRS = [
-    "AUDCAD","AUDCHF","AUDJPY","AUDNZD","AUDSGD","AUDUSD",
-    "CADCHF","CADJPY","CHFJPY","CHFNOK","CHFSGD",
-    "EURAUD","EURCAD","EURCHF","EURGBP","EURJPY","EURNOK","EURNZD","EURSGD","EURUSD","EURZAR",
-    "GBPAUD","GBPCAD","GBPCHF","GBPJPY","GBPNZD","GBPSGD","GBPUSD",
-    "NOKJPY",
-    "NZDCAD","NZDCHF","NZDJPY","NZDSGD","NZDUSD",
-    "SGDJPY",
-    "USDBRL","USDCAD","USDCHF","USDDKK","USDHKD","USDJPY","USDMXN","USDSGD","USDTHB","USDZAR"
+# Lista de ativos que você quer monitorar
+# Inclui OTC e ativos suportados (ex.: EURUSD_otc, GBPUSD_otc, etc.)
+ASSETS = [
+    "EURUSD_otc", "GBPUSD_otc", "AUDUSD_otc", "USDJPY_otc",
+    "USDBRL_otc", "EURGBP_otc", "USDCHF_otc", "USDVND_otc",
+    "USDZAR_otc", "EURUSD", "GBPUSD", "AUDUSD", "USDJPY"
 ]
 
 # ===============================
 # FUNÇÕES
 # ===============================
-def analisar_candles(data):
-    """
-    Analisa os últimos 20 candles.
-    Retorna 'CALL' ou 'PUT' baseado em fechamento/abertura.
-    """
-    sinais = {}
-    for par, candles in data.items():
-        ultimas = candles[-VELAS_ANALISE:]
-        altas = sum(1 for c in ultimas if float(c['close']) > float(c['open']))
-        baixas = VELAS_ANALISE - altas
-        if altas > baixas:
-            sinais[par] = "CALL"
-        elif baixas > altas:
-            sinais[par] = "PUT"
-        else:
-            sinais[par] = "NEUTRO"
-    return sinais
 
-async def enviar_sinal(sinal, par):
-    """
-    Envia mensagem para Telegram com hora, par e sinal.
-    """
+async def enviar_sinal_par(par, candle):
     hora = datetime.now().strftime("%H:%M:%S")
-    msg = f"🤖 **TROIA v15 — IA**\nHora: {hora}\nPar: {par}\nSinal: {sinal}\nTimeframe: {TIMEFRAME}"
-    await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode='Markdown')
+    msg = (
+        f"📊 *TROIA v15 — IA*\n"
+        f"Hora: {hora}\n"
+        f"Par: {par}\n"
+        f"Abertura: {candle['open']}\n"
+        f"Fechamento: {candle['close']}\n"
+        f"Alta: {candle['high']}  Baixa: {candle['low']}\n"
+        f"Timeframe: 1min"
+    )
+    await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+
+async def monitorar_mercado():
+    # Conecta e autentica no Quotex
+    client = Quotex(email=EMAIL, password=PASSWORD, lang="en")
+    success, msg = await client.connect()
+    if not success:
+        print("Erro ao conectar:", msg)
+        return
+
+    print("Conectado no Quotex com sucesso!")
+    
+    # Inscreve para receber dados de velas de todos os ativos
+    for asset in ASSETS:
+        await client.subscribe_candles(asset=asset, period=TIMEFRAME)
+
+    # Dicionário para guardar últimas velas
+    candles = {asset: [] for asset in ASSETS}
+
+    # Loop principal de dados
+    async for item in client.iter_candles_stream():
+        par = item.get("asset")
+        if par not in candles:
+            continue
+
+        # Monta candle em formato legível
+        candle = {
+            "open": item.get("open"),
+            "high": item.get("high"),
+            "low": item.get("low"),
+            "close": item.get("close"),
+            "time": item.get("from")
+        }
+        candles[par].append(candle)
+        if len(candles[par]) > 20:
+            candles[par].pop(0)
+
+        # Envia sinal para cada nova vela
+        await enviar_sinal_par(par, candle)
+
+    await client.close()
 
 async def main():
     while True:
-        data = {}
-        for par in PAIRS:
-            try:
-                # Pega candles 1min (Alpha retorna JSON)
-                raw, _ = fx.get_currency_exchange_intraday(
-                    from_symbol=par[:3],
-                    to_symbol=par[3:],
-                    interval='1min',
-                    outputsize='compact'
-                )
-                candles = []
-                for time_str, val in list(raw.items())[:VELAS_ANALISE]:
-                    candles.append({
-                        'open': val['1. open'],
-                        'high': val['2. high'],
-                        'low': val['3. low'],
-                        'close': val['4. close']
-                    })
-                data[par] = candles
-            except Exception as e:
-                print(f"Erro ao buscar {par}: {e}")
-
-        sinais = analisar_candles(data)
-
-        for par, sinal in sinais.items():
-            if sinal != "NEUTRO":
-                await enviar_sinal(sinal, par)
-
-        # Espera de 10 a 20 minutos para próxima análise
-        espera = random.randint(600, 1200)  # 600s = 10min, 1200s = 20min
-        print(f"Próxima análise em {espera // 60} minutos")
-        await asyncio.sleep(espera)
+        try:
+            await monitorar_mercado()
+        except Exception as e:
+            print("Erro no loop principal:", e)
+            await asyncio.sleep(5)
 
 if __name__ == "__main__":
     asyncio.run(main())
