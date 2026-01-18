@@ -1,3 +1,2 @@
-python-telegram-bot==20.6
-requests==2.32.0
-alpha_vantage
+pyquotex
+python-telegram-bot
