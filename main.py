@@ -2,7 +2,7 @@ import asyncio
 import random
 from datetime import datetime, timedelta, timezone
 import requests
-from telegram import Bot, ChatAction
+from telegram import Bot
 
 # ================= CONFIGURAÇÃO =================
 ALPHA_KEY = "3SYERLAJ3ZAT69TM"
@@ -119,7 +119,6 @@ async def enviar_sinal():
         "⚠️ Operação única. Aguarde o fechamento."
     )
 
-    await bot.send_chat_action(chat_id=CHAT_ID, action=ChatAction.TYPING)
     await bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
     estado = "AGUARDANDO_RESULTADO"
 
