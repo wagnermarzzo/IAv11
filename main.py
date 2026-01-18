@@ -1,44 +1,33 @@
 # main.py
 import asyncio
-import sys
-import subprocess
 from datetime import datetime
 
 # ===============================
-# INSTALAÇÃO AUTOMÁTICA DE BIBLIOTECAS (caso não esteja no ambiente)
+# IMPORTS
 # ===============================
-def instalar(pkg):
-    subprocess.check_call([sys.executable, "-m", "pip", "install", pkg])
-
-try:
-    from pyquotex.stable_api import Quotex
-except ImportError:
-    instalar("git+https://github.com/cleitonleonel/pyquotex.git")
-    from pyquotex.stable_api import Quotex
-
-try:
-    from telegram import Bot
-except ImportError:
-    instalar("python-telegram-bot")
-    from telegram import Bot
+from pyquotex.stable_api import Quotex
+from telegram import Bot
 
 # ===============================
 # CONFIGURAÇÃO
 # ===============================
 TOKEN = "123456789:ABCDEFGHIJKLMN_OPQRSTUVWXYZ"  # Seu token do Telegram
 CHAT_ID = "2055716345"                           # Seu chat ID do Telegram
+EMAIL = "apgwagner2@gmail.com"                   # Email da sua conta Quotex
+PASSWORD = "@Aa88691553"                         # Senha da sua conta Quotex
 TIMEFRAME = 60                                   # 1 minuto
-EMAIL = "apgwagner2@gmail.com"                 # Seu email da Quotex
-PASSWORD = "@Aa88691553"                     # Sua senha da Quotex
+VELAS_ANALISE = 20                               # Últimas 20 velas para análise
 
 bot = Bot(token=TOKEN)
 
 # ===============================
-# ATIVOS (incluindo OTC)
+# ATIVOS (Incluindo OTC)
 # ===============================
 ASSETS = [
-    "EURUSD", "EURUSD_otc", "GBPUSD", "GBPUSD_otc", "AUDUSD", "AUDUSD_otc", "USDJPY", "USDJPY_otc",
-    "USDBRL", "USDBRL_otc", "EURGBP", "EURGBP_otc", "USDCHF", "USDCHF_otc", "USDVND_otc", "USDZAR_otc"
+    "EURUSD", "EURUSD_otc", "GBPUSD", "GBPUSD_otc",
+    "AUDUSD", "AUDUSD_otc", "USDJPY", "USDJPY_otc",
+    "USDBRL", "USDBRL_otc", "EURGBP", "EURGBP_otc",
+    "USDCHF", "USDCHF_otc", "USDVND_otc", "USDZAR_otc"
 ]
 
 # ===============================
@@ -91,7 +80,7 @@ async def monitorar_mercado():
         }
 
         candles[par].append(candle)
-        if len(candles[par]) > 20:
+        if len(candles[par]) > VELAS_ANALISE:
             candles[par].pop(0)
 
         # Envia cada vela recebida para Telegram
