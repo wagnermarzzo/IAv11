@@ -1,73 +1,63 @@
+import requests
+import time
 import asyncio
-from telegram.ext import ApplicationBuilder, CommandHandler
-from api_alpha import AlphaVantage
+from telegram import Bot
 
-# ===============================
-# CONFIGURAÇÃO FIXA
-# ===============================
-TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
-CHAT_ID = "2055716345"
-API_KEY = "3SYERLAJ3ZAT69TM"
+# ==============================
+# CONFIGURAÇÃO
+# ==============================
+ALPHA_KEY = "3SYERLAJ3ZAT69TM"  # Sua API Key Alpha Vantage
+TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"  # Seu Token Telegram
+CHAT_ID = "2055716345"  # Seu Chat ID Telegram
+INTERVALO = 60  # Tempo entre checagens (segundos)
 
-alpha = AlphaVantage(API_KEY)
+# ==============================
+# LISTA DE ATIVOS
+# ==============================
+ATIVOS = [
+    "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA",  # Ações USA
+    "BTC", "ETH", "DOGE", "LTC", "XRP"        # Criptos
+]
 
-# ===============================
-# COMANDOS DO BOT
-# ===============================
-async def start(update, context):
-    await context.bot.send_message(chat_id=CHAT_ID,
-                                   text="Troia v11 Alpha Vantage ativo ✅")
+# ==============================
+# FUNÇÕES
+# ==============================
+def obter_preco(symbol):
+    """Busca o preço atual usando Alpha Vantage"""
+    url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={symbol}&apikey={ALPHA_KEY}"
+    try:
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        if "Global Quote" in data:
+            return float(data["Global Quote"]["05. price"])
+        else:
+            print(f"Erro na API para {symbol}: {data}")
+            return None
+    except Exception as e:
+        print(f"Erro ao consultar {symbol}: {e}")
+        return None
 
-async def get_signals(update, context):
-    mensagens = []
+async def enviar_telegram(msg):
+    """Envia mensagem para Telegram"""
+    bot = Bot(TOKEN)
+    try:
+        await bot.send_message(chat_id=CHAT_ID, text=msg)
+    except Exception as e:
+        print(f"Erro ao enviar Telegram: {e}")
 
-    # ---------- FOREX ----------
-    forex_list = [
-        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD",
-        "EURJPY", "GBPJPY", "EURGBP", "USDCAD", "USDCHF"
-    ]
-    for pair in forex_list:
-        data = alpha.get_forex(pair[:3], pair[3:])
-        if data:
-            rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate", "N/A")
-            mensagens.append(f"{pair} = {rate}")
-
-    # ---------- CRIPTO ----------
-    crypto_list = [
-        "BTC", "ETH", "XRP", "LTC", "DOGE", "ADA", "SOL", "BNB"
-    ]
-    for coin in crypto_list:
-        data = alpha.get_crypto(coin)
-        if data:
-            rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate", "N/A")
-            mensagens.append(f"{coin}/USD = {rate}")
-
-    # ---------- COMMODITIES EXEMPLO ----------
-    commodities = {
-        "Gold": ("XAU", "USD"),
-        "Silver": ("XAG", "USD")
-    }
-    for name, (from_c, to_c) in commodities.items():
-        data = alpha.get_forex(from_c, to_c)
-        if data:
-            rate = data.get("Realtime Currency Exchange Rate", {}).get("5. Exchange Rate", "N/A")
-            mensagens.append(f"{name} = {rate}")
-
-    # Envia mensagem final
-    msg_text = "\n".join(mensagens) if mensagens else "Nenhum dado disponível."
-    await context.bot.send_message(chat_id=CHAT_ID, text=msg_text)
-
-# ===============================
-# BOT
-# ===============================
 async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("signals", get_signals))
+    while True:
+        for ativo in ATIVOS:
+            preco = obter_preco(ativo)
+            if preco:
+                msg = f"💹 {ativo}: ${preco:.2f}"
+                print(msg)
+                await enviar_telegram(msg)
+            await asyncio.sleep(1)  # Evita sobrecarga de requests
+        await asyncio.sleep(INTERVALO)
 
-    await app.start()
-    await app.updater.start_polling()
-    await app.updater.idle()
-
+# ==============================
+# EXECUÇÃO
+# ==============================
 if __name__ == "__main__":
     asyncio.run(main())
