@@ -1,27 +1,28 @@
 import asyncio
-import requests
 from datetime import datetime, timedelta, timezone
 from telegram import Bot
 from telegram.ext import ApplicationBuilder, CallbackContext
+import requests
 import random
 
-# ================= CONFIGURAÇÃO =================
-ALPHA_KEY = "3SYERLAJ3ZAT69TM"  # API Alpha Vantage
-TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8HYY"
+# =============================== CONFIGURAÇÃO ===============================
+ALPHA_KEY = "3SYERLAJ3ZAT69TM"  # Sua API Key Alpha Vantage
+TOKEN = "8536239572:AAG82o0mJw9WP3RKGrJTaLp-Hl2q8Gx6HYY"
 CHAT_ID = 2055716345
 
-INTERVALO_LOOP = 30  # segundos
-TEMPO_VELA = 60      # duração da vela em segundos
+INTERVALO_LOOP = 30
+TEMPO_VELA = 60
 PAUSA_APOS_RED = 600
 RED_MAX = 3
-HISTORICO_TAM = 10   # últimos sinais usados para IA
 
+# Ativos OTC + Forex + Cripto
 ATIVOS = [
-    "BTCUSD", "ETHUSD", "AAPL", "GOOGL", "MSFT", "AMZN", "TSLA",
-    "EURUSD", "GBPUSD", "USDJPY"
+    "EURUSD","GBPUSD","USDJPY","AUDUSD","NZDUSD",
+    "EURJPY","GBPJPY","EURGBP","USDCAD",
+    "BTCUSD","ETHUSD","DOGEUSD"
 ]
 
-# ================= ESTADO =================
+# =============================== ESTADO ===============================
 estado = "LIVRE"
 sinal_atual = None
 fechamento_vela = None
@@ -37,13 +38,10 @@ estrategias = {
     "Micro Tendência": 1.0
 }
 
-# Histórico para IA de estudo
-historico_precos = {ativo: [] for ativo in ATIVOS}
-historico_sinais = []  # {"par":..., "direcao":..., "resultado":..., "estrategia":..., "hora":...}
-
 bot = Bot(token=TOKEN)
 
-# ================= FUNÇÕES =================
+# =============================== FUNÇÕES ===============================
+
 def agora_utc():
     return datetime.now(timezone.utc)
 
@@ -51,43 +49,46 @@ def proxima_vela():
     t = agora_utc() + timedelta(seconds=TEMPO_VELA)
     return t.replace(second=0).strftime("%H:%M")
 
-def pegar_preco(ativo):
-    """Pega último preço do ativo da Alpha Vantage"""
-    url = f"https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol={ativo}&apikey={ALPHA_KEY}"
+def score_estrategia(nome):
+    return int(estrategias[nome] * 100)
+
+def escolher_estrategia():
+    return max(estrategias, key=score_estrategia)
+
+def obter_candle_alpha(ativo):
+    """
+    Pega o candle mais recente da Alpha Vantage (1min ou intraday)
+    """
+    url = f"https://www.alphavantage.co/query?function=TIME_SERIES_INTRADAY&symbol={ativo}&interval=1min&apikey={ALPHA_KEY}"
     try:
         resp = requests.get(url, timeout=10)
         data = resp.json()
-        if "Global Quote" in data and "05. price" in data["Global Quote"]:
-            return float(data["Global Quote"]["05. price"])
+        times = list(data.get("Time Series (1min)", {}).keys())
+        if not times:
+            return None
+        ultimo = times[0]
+        candle = data["Time Series (1min)"][ultimo]
+        return {
+            "open": float(candle["1. open"]),
+            "close": float(candle["4. close"])
+        }
     except Exception as e:
-        print(f"Erro ao pegar preço {ativo}: {e}")
-    return None
+        print(f"Erro ao pegar candle {ativo}: {e}")
+        return None
 
-def calcular_score_estrategia(estrategia):
-    """Calcula score baseado em últimos sinais e peso atual"""
-    ultimos = [x for x in historico_sinais if x["estrategia"] == estrategia][-HISTORICO_TAM:]
-    if not ultimos:
-        eficiencia = 0
+def analisar_candle(candle, direcao):
+    """
+    Retorna GREEN ou RED baseado no candle
+    """
+    o = candle['open']
+    cl = candle['close']
+    if direcao == "CALL ⬆️":
+        return "GREEN" if cl > o else "RED"
     else:
-        greens_count = sum(1 for x in ultimos if x["resultado"] == "GREEN")
-        eficiencia = (greens_count / len(ultimos)) * 100
-    peso = estrategias[estrategia] * 100
-    return (peso + eficiencia) / 2
+        return "GREEN" if cl < o else "RED"
 
-def escolher_estrategia():
-    """Escolhe estratégia com maior score"""
-    return max(estrategias, key=calcular_score_estrategia)
+# =============================== SINAL ===============================
 
-def registrar_resultado(par, direcao, resultado, estrategia):
-    historico_sinais.append({
-        "par": par,
-        "direcao": direcao,
-        "resultado": resultado,
-        "estrategia": estrategia,
-        "hora": agora_utc()
-    })
-
-# ================= SINAL =================
 async def enviar_sinal():
     global estado, sinal_atual, fechamento_vela, pausa_ate
 
@@ -95,63 +96,41 @@ async def enviar_sinal():
         return
 
     estrategia = escolher_estrategia()
-    score = calcular_score_estrategia(estrategia)
-    if score < 50:  # só envia sinal se score >=50%
+    score = score_estrategia(estrategia)
+    if score < 75:
         return
 
     par = random.choice(ATIVOS)
-
-    # Direção com base na última performance da estratégia
-    ultimos = [x for x in historico_sinais if x["estrategia"] == estrategia and x["par"] == par][-HISTORICO_TAM:]
-    if not ultimos:
-        direcao = random.choice(["CALL ⬆️", "PUT ⬇️"])
-    else:
-        # se últimos 3 sinais da mesma direção foram GREEN, repetir direção
-        chamadas = [x for x in ultimos if x["direcao"] == "CALL ⬆️" and x["resultado"] == "GREEN"]
-        puts = [x for x in ultimos if x["direcao"] == "PUT ⬇️" and x["resultado"] == "GREEN"]
-        if len(chamadas) > len(puts):
-            direcao = "CALL ⬆️"
-        elif len(puts) > len(chamadas):
-            direcao = "PUT ⬇️"
-        else:
-            direcao = random.choice(["CALL ⬆️", "PUT ⬇️"])
-
+    direcao = random.choice(["CALL ⬆️", "PUT ⬇️"])
     entrada = proxima_vela()
 
     sinal_atual = {"par": par, "direcao": direcao, "estrategia": estrategia}
     fechamento_vela = agora_utc() + timedelta(seconds=TEMPO_VELA)
 
     texto = (
-        "🤖 **IAAlpha Sinais — TROIA v11**\n\n"
+        "🤖 **IAQuotex Sinais — TROIA v11 (Alpha)**\n\n"
         "🚨 **SETUP VALIDADO PELO MOTOR IA**\n\n"
         f"📊 **Ativo:** {par}\n"
         f"🕯 **Direção:** {direcao}\n"
         f"⏰ **Entrada:** {entrada} (PRÓXIMA VELA)\n"
         f"🧠 **Estratégia:** {estrategia}\n"
-        f"⭐ **Score:** {score:.2f}\n"
+        f"⭐ **Score:** {score}\n"
         "⚠️ Operação única. Aguarde o fechamento."
     )
+
     await bot.send_message(chat_id=CHAT_ID, text=texto, parse_mode="Markdown")
     estado = "AGUARDANDO_RESULTADO"
 
-# ================= RESULTADO =================
+# =============================== RESULTADO ===============================
+
 async def enviar_resultado():
     global estado, greens, reds, streak, pausa_ate
 
-    par = sinal_atual["par"]
-    preco_atual = pegar_preco(par)
-    if preco_atual is None:
+    candle = obter_candle_alpha(sinal_atual["par"])
+    if not candle:
         resultado = random.choice(["GREEN", "RED"])
     else:
-        ultimo_preco = historico_precos[par][-1] if historico_precos[par] else preco_atual
-        historico_precos[par].append(preco_atual)
-
-        if sinal_atual["direcao"] == "CALL ⬆️":
-            resultado = "GREEN" if preco_atual >= ultimo_preco else "RED"
-        else:
-            resultado = "GREEN" if preco_atual <= ultimo_preco else "RED"
-
-    registrar_resultado(par, sinal_atual["direcao"], resultado, sinal_atual["estrategia"])
+        resultado = analisar_candle(candle, sinal_atual["direcao"])
 
     if resultado == "GREEN":
         greens += 1
@@ -177,10 +156,12 @@ async def enviar_resultado():
         f"📈 Assertividade: {acc:.2f}%\n\n"
         "🧠 IA recalibrando estratégias..."
     )
+
     await bot.send_message(chat_id=CHAT_ID, text=resumo, parse_mode="Markdown")
     estado = "LIVRE"
 
-# ================= LOOP =================
+# =============================== LOOP ===============================
+
 async def loop_principal(context: CallbackContext):
     if estado == "LIVRE":
         await enviar_sinal()
@@ -188,11 +169,12 @@ async def loop_principal(context: CallbackContext):
         if agora_utc() >= fechamento_vela:
             await enviar_resultado()
 
-# ================= START =================
+# =============================== START ===============================
+
 async def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.job_queue.run_repeating(loop_principal, interval=INTERVALO_LOOP, first=10)
-    print("🚀 TROIA IA v11 ONLINE — Alpha + Telegram REAL")
+    print("🚀 TROIA IA v11 ONLINE — Alpha Vantage + Telegram")
     await app.run_polling()
 
 if __name__ == "__main__":
